@@ -849,3 +849,12 @@ class KU_1000BASEX(Module):
             gearbox.tx_data.eq(pcs.tbi_tx),
             pcs.tbi_rx.eq(gearbox.rx_data)
         ]
+
+        # DEBUG
+        self.submodules += [
+            add_probe_buffer("ku_1000basex", "tbi_rx_gtpowergood_n", pcs.tbi_rx, trigger=~gtpowergood, depth=128, clock_domain="eth_rx_half"),
+            add_probe_buffer("ku_1000basex", "tbi_rx_pll_reset", pcs.tbi_rx, trigger=pll_reset, depth=128, clock_domain="eth_rx_half"),
+            add_probe_single("ku_1000basex", "reset_counter", reset_counter, clock_domain="sys"),
+            add_probe_async("ku_1000basex", "tbi_tx", pcs.tbi_tx),
+            add_probe_async("ku_1000basex", "tbi_rx", pcs.tbi_rx),
+        ]

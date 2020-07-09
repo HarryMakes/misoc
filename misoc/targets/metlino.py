@@ -18,7 +18,7 @@ from misoc.targets.sayma_amc import CRG
 
 
 class BaseSoC(SoCSDRAM):
-    def __init__(self,sdram_controller_type="minicon", **kwargs):
+    def __init__(self, sdram_controller_type="minicon", **kwargs):
         platform = metlino.Platform()
         SoCSDRAM.__init__(self, platform, clk_freq=125*1000000,
                           **kwargs)
@@ -64,9 +64,10 @@ class MiniSoC(BaseSoC):
         self.interrupt_devices.append("ethmac")
 
         self.submodules.ethphy = KU_1000BASEX(
-           self.platform.request("gth_clk200"),
-           self.platform.request("port0", 0),
-           self.clk_freq)
+            self.platform.request("gth_clk200"),
+            #self.platform.request("port0", 0),
+            self.platform.request("sfp", 2),         # DEBUG
+            self.clk_freq)
         self.submodules.ethmac = LiteEthMAC(phy=self.ethphy, dw=32, interface="wishbone",
                                             nrxslots=ethmac_nrxslots, ntxslots=ethmac_ntxslots)
         ethmac_len = (ethmac_nrxslots + ethmac_ntxslots) * 0x800
