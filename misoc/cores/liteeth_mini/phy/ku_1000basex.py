@@ -810,13 +810,6 @@ class KU_1000BASEX(Module):
             AsyncResetSynchronizer(self.cd_eth_rx, ~rx_reset_done),
         ]
 
-        self.submodules += [
-            add_probe_async("ku_1000basex", "pll_lock", pll_locked),
-            add_probe_async("ku_1000basex", "tx_reset_done", tx_reset_done),
-            add_probe_async("ku_1000basex", "rx_reset_done", rx_reset_done),
-            add_probe_buffer("ku_1000basex", "txdata", tx_data, clock_domain="eth_tx_half"),
-            add_probe_buffer("ku_1000basex", "rxdata", rx_data, clock_domain="eth_rx_half"),
-        ]
 
         # Transceiver reset
         pll_reset_cycles = round(300000*sys_clk_freq//1000000000)
@@ -850,11 +843,30 @@ class KU_1000BASEX(Module):
             pcs.tbi_rx.eq(gearbox.rx_data)
         ]
 
+        # Exposed pins for microscope probing
+        self.pll_locked = pll_locked
+        self.tx_reset_done = tx_reset_done
+        self.rx_reset_done = tx_reset_done
+        self.tx_data = tx_data
+        self.rx_data = rx_data
         # DEBUG
-        self.submodules += [
-            add_probe_buffer("ku_1000basex", "tbi_rx_gtpowergood_n", pcs.tbi_rx, trigger=~gtpowergood, depth=128, clock_domain="eth_rx_half"),
-            add_probe_buffer("ku_1000basex", "tbi_rx_pll_reset", pcs.tbi_rx, trigger=pll_reset, depth=128, clock_domain="eth_rx_half"),
-            add_probe_single("ku_1000basex", "reset_counter", reset_counter, clock_domain="sys"),
-            add_probe_async("ku_1000basex", "tbi_tx", pcs.tbi_tx),
-            add_probe_async("ku_1000basex", "tbi_rx", pcs.tbi_rx),
-        ]
+        self.gtpowergood_n = ~gtpowergood
+        self.pll_reset = pll_reset
+        self.tbi_tx = pcs.tbi_tx
+        self.tbi_rx = pcs.tbi_rx
+        self.reset_counter = reset_counter
+
+        # Reference: 
+        # self.submodules += [
+        #     add_probe_async("ku_1000basex", "pll_lock", pll_locked),
+        #     add_probe_async("ku_1000basex", "tx_reset_done", tx_reset_done),
+        #     add_probe_async("ku_1000basex", "rx_reset_done", rx_reset_done),
+        #     add_probe_buffer("ku_1000basex", "txdata", tx_data, clock_domain="eth_tx_half"),
+        #     add_probe_buffer("ku_1000basex", "rxdata", rx_data, clock_domain="eth_rx_half"),
+        #     # DEBUG
+        #     add_probe_buffer("ku_1000basex", "tbi_rx_gtpowergood_n", pcs.tbi_rx, trigger=~gtpowergood, depth=128, clock_domain="eth_rx_half"),
+        #     add_probe_buffer("ku_1000basex", "tbi_rx_pll_reset", pcs.tbi_rx, trigger=pll_reset, depth=128, clock_domain="eth_rx_half"),
+        #     add_probe_single("ku_1000basex", "reset_counter", reset_counter, clock_domain="sys"),
+        #     add_probe_async("ku_1000basex", "tbi_tx", pcs.tbi_tx),
+        #     add_probe_async("ku_1000basex", "tbi_rx", pcs.tbi_rx),
+        # ]
