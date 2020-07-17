@@ -811,3 +811,37 @@ class A7_1000BASEX(Module):
             gearbox.tx_data.eq(pcs.tbi_tx),
             pcs.tbi_rx.eq(gearbox.rx_data)
         ]
+
+        # Exposed pins for microscope probing
+        self.pll_locked = tx_init.qpll_lock
+        self.tx_reset = tx_init.tx_reset
+        self.pll_reset = tx_init.qpll_reset
+        self.tx_reset_done = tx_reset_done
+        self.rx_reset_done = tx_reset_done
+        self.tx_data = tx_data
+        self.rx_data = rx_data
+        self.is_sgmii = pcs.is_sgmii
+        self.sgmii_speed = pcs.sgmii_speed
+        self.link_partner_adv_ability = pcs.link_partner_adv_ability
+        # DEBUG
+        self.tbi_tx = pcs.tbi_tx
+        self.tbi_rx = pcs.tbi_rx
+        self.rx_enter_data = pcs.rx.rx_en
+        self.fsm_rx_k28_5 = pcs.rx.fsm_k28_5
+        self.fsm_rx_config_reg_lsb = pcs.rx.fsm_config_reg_lsb
+        self.fsm_rx_config_reg_msb = pcs.rx.fsm_config_reg_msb
+        self.fsm_rx_start_before_idle = pcs.rx.fsm_start_before_idle
+
+        # Reference: 
+        # self.submodules += [
+        #     add_probe_async("a7_1000basex", "pll_lock", self.ethphy.pll_locked),
+        #     add_probe_async("a7_1000basex", "tx_reset_done", self.ethphy.tx_reset_done),
+        #     add_probe_async("a7_1000basex", "rx_reset_done", self.ethphy.rx_reset_done),
+        #     add_probe_buffer("a7_1000basex", "txdata", self.ethphy.tx_data, clock_domain="eth_tx_half"),
+        #     add_probe_buffer("a7_1000basex", "rxdata", self.ethphy.rx_data, clock_domain="eth_rx_half"),
+        #     # DEBUG
+        #     add_probe_buffer("a7_1000basex", "tbi_rx_tx_reset", self.ethphy.tbi_tx, trigger=self.ethphy.tx_reset, depth=128, clock_domain="eth_tx_half"),
+        #     add_probe_buffer("a7_1000basex", "tbi_rx_pll_reset", self.ethphy.tbi_rx, trigger=self.ethphy.pll_reset, depth=128, clock_domain="eth_rx_half"),
+        #     add_probe_single("a7_1000basex", "is_sgmii", self.is_sgmii),
+        #     add_probe_single("a7_1000basex", "sgmii_speed", self.sgmii_speed)
+        # ]

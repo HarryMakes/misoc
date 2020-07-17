@@ -64,6 +64,10 @@ class TransmitPath(Module):
                 )
             )
         )
+        # /K28.5/ == /C/
+        # It is the first code-group in an ordered_set that provides 
+        # synchronisation of bits & code-groups as well as establishes 
+        # alignment of ordered_sets.
         fsm.act("CONFIG_D",
             If(c_type,
                 self.encoder.d[0].eq(D(2, 2))
@@ -131,16 +135,23 @@ class ReceivePath(Module):
         self.seen_config_reg = Signal()
         self.config_reg = Signal(16)
 
+        # SGMII Speed Adaptation
+
         self.submodules.decoder = code_8b10b.Decoder(lsb_first=lsb_first)
 
         # # #
 
+        # DEBUG
+        self.config_is_not_zero = Signal()
+
         config_reg_lsb = Signal(8)
         load_config_reg_lsb = Signal()
-        load_config_reg_msb = Signal()
+        self.load_config_reg_msb = load_config_reg_msb = Signal()
         self.sync += [
             self.seen_config_reg.eq(0),
-            If(load_config_reg_lsb, config_reg_lsb.eq(self.decoder.d)),
+            If(load_config_reg_lsb, config_reg_lsb.eq(self.decoder.d),
+                # DEBUG
+                If(self.decoder.d != 0, self.config_is_not_zero.eq(1))),
             If(load_config_reg_msb,
                 self.config_reg.eq(Cat(config_reg_lsb, self.decoder.d)),
                 self.seen_config_reg.eq(1)
@@ -150,8 +161,15 @@ class ReceivePath(Module):
         first_preamble_byte = Signal()
         self.comb += self.rx_data.eq(Mux(first_preamble_byte, 0x55, self.decoder.d))
 
+        # PCS receive state diagram, Figure 36-7a/b
         fsm = FSM()
         self.submodules += fsm
+
+        # DEBUG
+        self.fsm_k28_5 = fsm.ongoing("K28_5")
+        self.fsm_config_reg_lsb = fsm.ongoing("CONFIG_REG_LSB")
+        self.fsm_config_reg_msb = fsm.ongoing("CONFIG_REG_MSB")
+        self.fsm_start_before_idle = Signal()
 
         fsm.act("START",
             If(self.decoder.k,
@@ -165,6 +183,11 @@ class ReceivePath(Module):
                 )
             )
         )
+        # /K28.5/ == /C/
+        # It is the first code-group in an ordered_set that provides 
+        # synchronisation of bits & code-groups as well as establishes 
+        # alignment of ordered_sets.
+        # RX_CB
         fsm.act("K28_5",
             NextState("START"),
             If(~self.decoder.k,
@@ -175,10 +198,13 @@ class ReceivePath(Module):
                 If((self.decoder.d == D(5, 6)) | (self.decoder.d == D(16, 2)),
                     # idle
                     self.seen_valid_ci.eq(1),
+                    # DEBUG
+                    self.fsm_start_before_idle.eq(1),
                     NextState("START")
                 ),
             )
         )
+        # RX_CC
         fsm.act("CONFIG_REG_LSB",
             If(self.decoder.k,
                 If(self.decoder.d == K(27, 7),
@@ -193,6 +219,7 @@ class ReceivePath(Module):
                 NextState("CONFIG_REG_MSB")
             )
         )
+        # RX_CD
         fsm.act("CONFIG_REG_MSB",
             If(~self.decoder.k,
                 load_config_reg_msb.eq(1)
@@ -222,6 +249,11 @@ class PCS(Module):
         
         self.link_up = Signal()
         self.restart = Signal()
+
+        self.link_partner_adv_ability = Signal(16)
+
+        self.is_sgmii = Signal()
+        self.sgmii_speed = Signal(2)
 
         # # #
         
@@ -262,7 +294,12 @@ class PCS(Module):
         ]
 
         autoneg_ack = Signal()
-        self.comb += self.tx.config_reg.eq((1 << 5) | (autoneg_ack << 14))
+        self.comb += self.tx.config_reg.eq(
+            (1 << 5) |              # Full-duplex
+            (autoneg_ack << 14)     # ACK
+            #(1 << 14) |
+            #1
+        )
 
         rx_config_reg = PulseSynchronizer("eth_rx", "eth_tx")
         rx_config_reg_ack = PulseSynchronizer("eth_rx", "eth_tx")
@@ -274,6 +311,22 @@ class PCS(Module):
 
         fsm = ClockDomainsRenamer("eth_tx")(FSM())
         self.submodules += fsm
+
+        # DEBUG
+        self.fsm_an_wait_config_reg = Signal()
+        self.fsm_an_wait_ack = Signal()
+        self.fsm_an_send_more_ack = Signal()
+        self.comb += [
+            self.fsm_an_wait_config_reg.eq(
+                fsm.ongoing("AUTONEG_WAIT_CONFIG_REG")
+            ),
+            self.fsm_an_wait_ack.eq(
+                fsm.ongoing("AUTONEG_WAIT_ACK")
+            ),
+            self.fsm_an_send_more_ack.eq(
+                fsm.ongoing("AUTONEG_SEND_MORE_ACK")
+            )
+        ]
 
         fsm.act("AUTONEG_WAIT_CONFIG_REG",
             self.tx.config_stb.eq(1),
@@ -296,6 +349,7 @@ class PCS(Module):
                 NextState("AUTONEG_WAIT_CONFIG_REG")
             )
         )
+        # COMPLETE_ACKNOWLEDGE
         fsm.act("AUTONEG_SEND_MORE_ACK",
             self.tx.config_stb.eq(1),
             autoneg_ack.eq(1),
@@ -308,6 +362,7 @@ class PCS(Module):
                 NextState("AUTONEG_WAIT_CONFIG_REG")
             )
         )
+        # LINK_OK
         fsm.act("RUNNING",
             self.link_up.eq(1),
             If(checker_tick & ~checker_ok,
@@ -336,6 +391,14 @@ class PCS(Module):
                     ).Else(
                         rx_config_reg.i.eq(1)
                     )
-                )
+                ),
+                # Record advertised ability of link partner
+                self.link_partner_adv_ability.eq(self.rx.config_reg)
             )
+        ]
+
+        # Speed detection via SGMII
+        self.comb += [
+            self.is_sgmii.eq(self.link_partner_adv_ability[0]),
+            self.sgmii_speed.eq(self.link_partner_adv_ability[10:12])
         ]
