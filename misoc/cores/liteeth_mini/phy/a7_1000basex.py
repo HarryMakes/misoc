@@ -820,8 +820,9 @@ class A7_1000BASEX(Module):
         self.rx_reset_done = tx_reset_done
         self.tx_data = tx_data
         self.rx_data = rx_data
+        self.rx_timer = pcs.rx.timer
         self.is_sgmii = pcs.is_sgmii
-        self.sgmii_speed = pcs.sgmii_speed
+        self.sgmii_speed = pcs.rx.sgmii_speed
         self.link_partner_adv_ability = pcs.link_partner_adv_ability
         # DEBUG
         self.tbi_tx = pcs.tbi_tx

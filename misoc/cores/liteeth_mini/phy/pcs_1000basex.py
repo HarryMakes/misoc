@@ -135,9 +135,11 @@ class ReceivePath(Module):
         self.seen_config_reg = Signal()
         self.config_reg = Signal(16)
 
-        # SGMII Speed Adaptation
-
         self.submodules.decoder = code_8b10b.Decoder(lsb_first=lsb_first)
+
+        # SGMII Speed Adaptation
+        self.timer = Signal(max=1000)
+        self.sgmii_speed = Signal(2)
 
         # # #
 
@@ -160,6 +162,21 @@ class ReceivePath(Module):
 
         first_preamble_byte = Signal()
         self.comb += self.rx_data.eq(Mux(first_preamble_byte, 0x55, self.decoder.d))
+
+        # Timer for SGMII data rates
+        timer_en = Signal()
+        self.sync += [
+            If(timer_en, 
+                If(((self.sgmii_speed == 0b00) & (self.timer == 99)) | 
+                    ((self.sgmii_speed == 0b01) & (self.timer == 9)) | 
+                    ((self.sgmii_speed == 0b10) & (self.timer == 0)) | 
+                    (~timer_en), 
+                    self.timer.eq(0)
+                ).Else(
+                    self.timer.eq(self.timer + 1)
+                )
+            )
+        ]
 
         # PCS receive state diagram, Figure 36-7a/b
         fsm = FSM()
@@ -230,6 +247,7 @@ class ReceivePath(Module):
             If(self.decoder.k,
                 NextState("START")
             ).Else(
+                timer_en.eq(1),
                 self.rx_en.eq(1)
             )
         )
@@ -252,8 +270,9 @@ class PCS(Module):
 
         self.link_partner_adv_ability = Signal(16)
 
+        # SGMII Speed Adaptation
         self.is_sgmii = Signal()
-        self.sgmii_speed = Signal(2)
+        self.sample_en = Signal()
 
         # # #
         
@@ -267,7 +286,7 @@ class PCS(Module):
         rx_en_d = Signal()
         self.sync.eth_rx += [
             rx_en_d.eq(self.rx.rx_en),
-            self.source.stb.eq(self.rx.rx_en),
+            self.source.stb.eq(Mux(self.is_sgmii, self.sample_en, 1)),
             self.source.data.eq(self.rx.rx_data)
         ]
         self.comb += self.source.eop.eq(~self.rx.rx_en & rx_en_d)
@@ -297,8 +316,6 @@ class PCS(Module):
         self.comb += self.tx.config_reg.eq(
             (1 << 5) |              # Full-duplex
             (autoneg_ack << 14)     # ACK
-            #(1 << 14) |
-            #1
         )
 
         rx_config_reg = PulseSynchronizer("eth_rx", "eth_tx")
@@ -400,5 +417,8 @@ class PCS(Module):
         # Speed detection via SGMII
         self.comb += [
             self.is_sgmii.eq(self.link_partner_adv_ability[0]),
-            self.sgmii_speed.eq(self.link_partner_adv_ability[10:12])
+            self.rx.sgmii_speed.eq(self.link_partner_adv_ability[10:12])
         ]
+
+        # Speed adaptation
+        self.comb += self.sample_en.eq(self.rx.timer == 0)
