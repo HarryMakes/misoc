@@ -65,19 +65,22 @@ class TransmitPath(Module):
         self.submodules += fsm
 
         fsm.act("START",
-            self.tx_ack.eq(1),  # discard TX data if we are in config_reg phase
             If(self.config_stb,
+                self.tx_ack.eq(1),  # discard TX data if we are in config_reg phase
                 load_config_reg_buffer.eq(1),
                 self.encoder.k[0].eq(1),
                 self.encoder.d[0].eq(K(28, 5)),
                 NextState("CONFIG_D")
             ).Else(
                 If(self.tx_stb,
-                    # the first byte of the preamble is replaced by /S/
+                    # the first byte sent is replaced by /S/
+                    self.tx_ack.eq((self.timer == 0)),
+                    timer_en.eq(1),
                     self.encoder.k[0].eq(1),
                     self.encoder.d[0].eq(K(27, 7)),
                     NextState("DATA")
                 ).Else(
+                    self.tx_ack.eq(1),  # discard TX data
                     self.encoder.k[0].eq(1),
                     self.encoder.d[0].eq(K(28, 5)),
                     NextState("IDLE")
@@ -212,8 +215,8 @@ class ReceivePath(Module):
                     NextState("K28_5")
                 ),
                 If(self.decoder.d == K(27, 7),
-                    timer_en.eq(1),
                     self.rx_en.eq(1),
+                    timer_en.eq(1),
                     first_preamble_byte.eq(1),
                     NextState("DATA")
                 )
