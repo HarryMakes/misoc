@@ -56,7 +56,7 @@ class TransmitPath(Module):
                 ).Elif(self.sgmii_speed == 0b10,
                     self.timer.eq(0)
                 )
-            ).Else(
+            ).Elif(timer_en,
                 self.timer.eq(self.timer - 1)
             )
         ]
@@ -66,7 +66,6 @@ class TransmitPath(Module):
 
         fsm.act("START",
             self.tx_ack.eq(1),  # discard TX data if we are in config_reg phase
-            timer_en.eq(0),
             If(self.config_stb,
                 load_config_reg_buffer.eq(1),
                 self.encoder.k[0].eq(1),
@@ -119,11 +118,12 @@ class TransmitPath(Module):
             NextState("START")
         )
         fsm.act("DATA",
-            self.tx_ack.eq(1),
-            timer_en.eq(1),
             If(self.tx_stb,
+                self.tx_ack.eq((self.timer == 0)),
+                timer_en.eq(1),
                 self.encoder.d[0].eq(self.tx_data)
             ).Else(
+                self.tx_ack.eq(1),
                 # /T/
                 self.encoder.k[0].eq(1),
                 self.encoder.d[0].eq(K(29, 7)),
@@ -162,20 +162,18 @@ class ReceivePath(Module):
         # SGMII Speed Adaptation
         self.timer = Signal(max=1000)
         self.sgmii_speed = Signal(2)
+        self.sample_en = Signal()
 
         # # #
-
-        # DEBUG
-        self.config_is_not_zero = Signal()
 
         config_reg_lsb = Signal(8)
         load_config_reg_lsb = Signal()
         self.load_config_reg_msb = load_config_reg_msb = Signal()
         self.sync += [
             self.seen_config_reg.eq(0),
-            If(load_config_reg_lsb, config_reg_lsb.eq(self.decoder.d),
-                # DEBUG
-                If(self.decoder.d != 0, self.config_is_not_zero.eq(1))),
+            If(load_config_reg_lsb, 
+                config_reg_lsb.eq(self.decoder.d)
+            ),
             If(load_config_reg_msb,
                 self.config_reg.eq(Cat(config_reg_lsb, self.decoder.d)),
                 self.seen_config_reg.eq(1)
@@ -201,23 +199,20 @@ class ReceivePath(Module):
             )
         ]
 
+        # Speed adaptation
+        self.comb += self.sample_en.eq(self.rx_en & (self.timer == 0))
+
         # PCS receive state diagram, Figure 36-7a/b
         fsm = FSM()
         self.submodules += fsm
 
-        # DEBUG
-        self.fsm_k28_5 = fsm.ongoing("K28_5")
-        self.fsm_config_reg_lsb = fsm.ongoing("CONFIG_REG_LSB")
-        self.fsm_config_reg_msb = fsm.ongoing("CONFIG_REG_MSB")
-        self.fsm_start_before_idle = Signal()
-
         fsm.act("START",
-            timer_en.eq(0),
             If(self.decoder.k,
                 If(self.decoder.d == K(28, 5),
                     NextState("K28_5")
                 ),
                 If(self.decoder.d == K(27, 7),
+                    timer_en.eq(1),
                     self.rx_en.eq(1),
                     first_preamble_byte.eq(1),
                     NextState("DATA")
@@ -239,8 +234,6 @@ class ReceivePath(Module):
                 If((self.decoder.d == D(5, 6)) | (self.decoder.d == D(16, 2)),
                     # idle
                     self.seen_valid_ci.eq(1),
-                    # DEBUG
-                    self.fsm_start_before_idle.eq(1),
                     NextState("START")
                 ),
             )
@@ -250,6 +243,7 @@ class ReceivePath(Module):
             If(self.decoder.k,
                 If(self.decoder.d == K(27, 7),
                     self.rx_en.eq(1),
+                    timer_en.eq(1),
                     first_preamble_byte.eq(1),
                     NextState("DATA")
                 ).Else(
@@ -271,8 +265,8 @@ class ReceivePath(Module):
             If(self.decoder.k,
                 NextState("START")
             ).Else(
-                timer_en.eq(1),
-                self.rx_en.eq(1)
+                self.rx_en.eq(1),
+                timer_en.eq(1)
             )
         )
 
@@ -292,26 +286,23 @@ class PCS(Module):
         self.link_up = Signal()
         self.restart = Signal()
 
-        self.link_partner_adv_ability = Signal(16)
-
         # SGMII Speed Adaptation
         self.is_sgmii = Signal()
-        self.tx_sample = Signal()
-        self.rx_sample = Signal()
+        self.link_partner_adv_ability = Signal(16)
 
         # # #
         
         # endpoint interface
         self.comb += [
             self.tx.tx_stb.eq(self.sink.stb),
-            self.sink.ack.eq(self.tx.tx_ack & self.tx_sample),
+            self.sink.ack.eq(self.tx.tx_ack),
             self.tx.tx_data.eq(self.sink.data),
         ]
 
         rx_en_d = Signal()
         self.sync.eth_rx += [
             rx_en_d.eq(self.rx.rx_en),
-            self.source.stb.eq(Mux(self.is_sgmii, self.rx_sample, 1)),
+            self.source.stb.eq(self.rx.sample_en),
             self.source.data.eq(self.rx.rx_data)
         ]
         self.comb += self.source.eop.eq(~self.rx.rx_en & rx_en_d)
@@ -339,45 +330,39 @@ class PCS(Module):
 
         autoneg_ack = Signal()
         self.comb += self.tx.config_reg.eq(
-            (1 << 5) |              # Full-duplex
+            (self.is_sgmii) |       # SGMII-specific
+            (~self.is_sgmii << 5) | # Full-duplex
             (autoneg_ack << 14)     # ACK
         )
 
-        rx_config_reg = PulseSynchronizer("eth_rx", "eth_tx")
+        rx_config_reg_seen = PulseSynchronizer("eth_rx", "eth_tx")
+        rx_config_reg_abi = PulseSynchronizer("eth_rx", "eth_tx")
         rx_config_reg_ack = PulseSynchronizer("eth_rx", "eth_tx")
-        self.submodules += rx_config_reg, rx_config_reg_ack
+        self.submodules += [
+            rx_config_reg_seen, 
+            rx_config_reg_abi, rx_config_reg_ack
+        ]
 
         more_ack_timer = ClockDomainsRenamer("eth_tx")(
             WaitTimer(ceil(more_ack_time*125e6)))
         self.submodules += more_ack_timer
 
+        fsm_inited = Signal()
+
         fsm = ClockDomainsRenamer("eth_tx")(FSM())
         self.submodules += fsm
 
-        # DEBUG
-        self.fsm_an_wait_config_reg = Signal()
-        self.fsm_an_wait_ack = Signal()
-        self.fsm_an_send_more_ack = Signal()
-        self.comb += [
-            self.fsm_an_wait_config_reg.eq(
-                fsm.ongoing("AUTONEG_WAIT_CONFIG_REG")
-            ),
-            self.fsm_an_wait_ack.eq(
-                fsm.ongoing("AUTONEG_WAIT_ACK")
-            ),
-            self.fsm_an_send_more_ack.eq(
-                fsm.ongoing("AUTONEG_SEND_MORE_ACK")
-            )
-        ]
-
-        fsm.act("AUTONEG_WAIT_CONFIG_REG",
-            self.tx.config_stb.eq(1),
-            If(rx_config_reg.o|rx_config_reg_ack.o,
+        # Only use checker for ability advertisement in non-SGMII mode
+        fsm.act("AUTONEG_WAIT_ABI",
+            # The following line HAS NOT been tested with 1000BASE-X
+            self.tx.config_stb.eq(fsm_inited & ~self.is_sgmii),
+            If(rx_config_reg_abi.o,
+                NextValue(fsm_inited, 1),
                 NextState("AUTONEG_WAIT_ACK")
             ),
             If(checker_tick & ~checker_ok,
                 self.restart.eq(1),
-                NextState("AUTONEG_WAIT_CONFIG_REG")
+                NextState("AUTONEG_WAIT_ABI")
             )
         )
         fsm.act("AUTONEG_WAIT_ACK",
@@ -388,7 +373,7 @@ class PCS(Module):
             ),
             If(checker_tick & ~checker_ok,
                 self.restart.eq(1),
-                NextState("AUTONEG_WAIT_CONFIG_REG")
+                NextState("AUTONEG_WAIT_ABI")
             )
         )
         # COMPLETE_ACKNOWLEDGE
@@ -401,7 +386,7 @@ class PCS(Module):
             ),
             If(checker_tick & ~checker_ok,
                 self.restart.eq(1),
-                NextState("AUTONEG_WAIT_CONFIG_REG")
+                NextState("AUTONEG_WAIT_ABI")
             )
         )
         # LINK_OK
@@ -409,45 +394,52 @@ class PCS(Module):
             self.link_up.eq(1),
             If(checker_tick & ~checker_ok,
                 self.restart.eq(1),
-                NextState("AUTONEG_WAIT_CONFIG_REG")
+                NextState("AUTONEG_WAIT_ABI")
             )
         )
 
         c_counter = Signal(max=5)
         previous_config_reg = Signal(16)
+        preack_config_reg = Signal(16)
         self.sync.eth_rx += [
+            rx_config_reg_seen.i.eq(self.rx.seen_config_reg),
+
+            # Restart consistency counter
             If(self.rx.seen_config_reg,
                 c_counter.eq(4)
             ).Elif(c_counter != 0,
                 c_counter.eq(c_counter - 1)
             ),
 
+            rx_config_reg_abi.i.eq(0),
             rx_config_reg_ack.i.eq(0),
-            rx_config_reg.i.eq(0),
             If(self.rx.seen_config_reg,
                 previous_config_reg.eq(self.rx.config_reg),
-                # two identical config_reg in immediate succession
-                If((c_counter == 1) & (previous_config_reg == self.rx.config_reg),
-                    If(previous_config_reg[14],
+                If((c_counter == 1) & 
+                    ((previous_config_reg|0x4000) == (self.rx.config_reg|0x4000)),
+                    # Ability match
+                    rx_config_reg_abi.i.eq(1),
+                    preack_config_reg.eq(previous_config_reg),
+                    # Acknowledgement/Consistency match
+                    If((previous_config_reg[14] & self.rx.config_reg[14]) &
+                        ((preack_config_reg|0x4000) == (self.rx.config_reg|0x4000)),
                         rx_config_reg_ack.i.eq(1)
-                    ).Else(
-                        rx_config_reg.i.eq(1)
                     )
                 ),
                 # Record advertised ability of link partner
-                self.link_partner_adv_ability.eq(self.rx.config_reg)
+                If(self.rx.config_reg[0],
+                    self.link_partner_adv_ability.eq(self.rx.config_reg)
+                ).Else(
+                    self.link_partner_adv_ability.eq(0x0000)
+                )
             )
         ]
 
         # Speed detection via SGMII
+        sgmii_speed = Mux(self.is_sgmii,
+            self.link_partner_adv_ability[10:12], 0b10)
         self.comb += [
             self.is_sgmii.eq(self.link_partner_adv_ability[0]),
-            self.tx.sgmii_speed.eq(self.link_partner_adv_ability[10:12]),
-            self.rx.sgmii_speed.eq(self.link_partner_adv_ability[10:12])
-        ]
-
-        # Speed adaptation
-        self.comb += [
-            self.tx_sample.eq(self.tx.timer == 0),
-            self.rx_sample.eq(self.rx.timer == 0)
+            self.tx.sgmii_speed.eq(sgmii_speed),
+            self.rx.sgmii_speed.eq(sgmii_speed)
         ]

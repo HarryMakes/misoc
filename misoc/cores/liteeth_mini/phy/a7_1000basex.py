@@ -829,10 +829,6 @@ class A7_1000BASEX(Module):
         self.tbi_tx = pcs.tbi_tx
         self.tbi_rx = pcs.tbi_rx
         self.rx_enter_data = pcs.rx.rx_en
-        self.fsm_rx_k28_5 = pcs.rx.fsm_k28_5
-        self.fsm_rx_config_reg_lsb = pcs.rx.fsm_config_reg_lsb
-        self.fsm_rx_config_reg_msb = pcs.rx.fsm_config_reg_msb
-        self.fsm_rx_start_before_idle = pcs.rx.fsm_start_before_idle
 
         # Reference: 
         # self.submodules += [
