@@ -338,11 +338,9 @@ class PCS(Module):
             (autoneg_ack << 14)     # ACK
         )
 
-        rx_config_reg_seen = PulseSynchronizer("eth_rx", "eth_tx")
         rx_config_reg_abi = PulseSynchronizer("eth_rx", "eth_tx")
         rx_config_reg_ack = PulseSynchronizer("eth_rx", "eth_tx")
         self.submodules += [
-            rx_config_reg_seen, 
             rx_config_reg_abi, rx_config_reg_ack
         ]
 
@@ -351,14 +349,14 @@ class PCS(Module):
         self.submodules += more_ack_timer
 
         fsm_inited = Signal()
+        config_reg_empty = Signal()
 
         fsm = ClockDomainsRenamer("eth_tx")(FSM())
         self.submodules += fsm
 
         # Only use checker for ability advertisement in non-SGMII mode
         fsm.act("AUTONEG_WAIT_ABI",
-            # The following line HAS NOT been tested with 1000BASE-X
-            self.tx.config_stb.eq(fsm_inited & ~self.is_sgmii),
+            self.tx.config_stb.eq(fsm_inited),
             If(rx_config_reg_abi.o,
                 NextValue(fsm_inited, 1),
                 NextState("AUTONEG_WAIT_ACK")
@@ -395,7 +393,7 @@ class PCS(Module):
         # LINK_OK
         fsm.act("RUNNING",
             self.link_up.eq(1),
-            If(checker_tick & ~checker_ok,
+            If((checker_tick & ~checker_ok) | config_reg_empty,
                 self.restart.eq(1),
                 NextState("AUTONEG_WAIT_ABI")
             )
@@ -405,8 +403,6 @@ class PCS(Module):
         previous_config_reg = Signal(16)
         preack_config_reg = Signal(16)
         self.sync.eth_rx += [
-            rx_config_reg_seen.i.eq(self.rx.seen_config_reg),
-
             # Restart consistency counter
             If(self.rx.seen_config_reg,
                 c_counter.eq(4)
@@ -419,7 +415,8 @@ class PCS(Module):
             If(self.rx.seen_config_reg,
                 previous_config_reg.eq(self.rx.config_reg),
                 If((c_counter == 1) & 
-                    ((previous_config_reg|0x4000) == (self.rx.config_reg|0x4000)),
+                    ((previous_config_reg|0x4000) == (self.rx.config_reg|0x4000)) &
+                    ((self.rx.config_reg | 1) != 1),
                     # Ability match
                     rx_config_reg_abi.i.eq(1),
                     preack_config_reg.eq(previous_config_reg),
@@ -430,11 +427,7 @@ class PCS(Module):
                     )
                 ),
                 # Record advertised ability of link partner
-                If(self.rx.config_reg[0],
-                    self.link_partner_adv_ability.eq(self.rx.config_reg)
-                ).Else(
-                    self.link_partner_adv_ability.eq(0x0000)
-                )
+                self.link_partner_adv_ability.eq(self.rx.config_reg)
             )
         ]
 
@@ -445,4 +438,9 @@ class PCS(Module):
             self.is_sgmii.eq(self.link_partner_adv_ability[0]),
             self.tx.sgmii_speed.eq(sgmii_speed),
             self.rx.sgmii_speed.eq(sgmii_speed)
+        ]
+
+        # Detect that config_reg is empty
+        self.comb += [
+            config_reg_empty.eq((self.link_partner_adv_ability | 1) == 1)
         ]
