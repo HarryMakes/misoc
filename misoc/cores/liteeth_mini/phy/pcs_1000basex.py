@@ -189,16 +189,16 @@ class ReceivePath(Module):
         # Timer for SGMII data rates
         timer_en = Signal()
         self.sync += [
-            If(timer_en, 
-                If(((self.sgmii_speed == 0b00) & (self.timer == 99)) | 
-                    ((self.sgmii_speed == 0b01) & (self.timer == 9)) | 
-                    ((self.sgmii_speed == 0b10) & (self.timer == 0)),
+            If(~timer_en | (self.timer == 0),
+                If(self.sgmii_speed == 0b00,
+                    self.timer.eq(99)
+                ).Elif(self.sgmii_speed == 0b01,
+                    self.timer.eq(9)
+                ).Elif(self.sgmii_speed == 0b10,
                     self.timer.eq(0)
-                ).Else(
-                    self.timer.eq(self.timer + 1)
                 )
-            ).Else(
-                self.timer.eq(0)
+            ).Elif(timer_en,
+                self.timer.eq(self.timer - 1)
             )
         ]
 
