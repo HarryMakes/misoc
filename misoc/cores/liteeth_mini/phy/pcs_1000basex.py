@@ -32,7 +32,7 @@ class TransmitPath(Module):
         self.submodules.encoder = code_8b10b.Encoder(lsb_first=lsb_first)
 
         # SGMII Speed Adaptation
-        self.timer = Signal(max=1000)
+        timer = Signal(max=1000)
         self.sgmii_speed = Signal(2)
 
         # # #
@@ -48,16 +48,16 @@ class TransmitPath(Module):
         # Timer for SGMII data rates
         timer_en = Signal()
         self.sync += [
-            If(~timer_en | (self.timer == 0),
+            If(~timer_en | (timer == 0),
                 If(self.sgmii_speed == 0b00,
-                    self.timer.eq(99)
+                    timer.eq(99)
                 ).Elif(self.sgmii_speed == 0b01,
-                    self.timer.eq(9)
+                    timer.eq(9)
                 ).Elif(self.sgmii_speed == 0b10,
-                    self.timer.eq(0)
+                    timer.eq(0)
                 )
             ).Elif(timer_en,
-                self.timer.eq(self.timer - 1)
+                timer.eq(timer - 1)
             )
         ]
 
@@ -74,7 +74,7 @@ class TransmitPath(Module):
             ).Else(
                 If(self.tx_stb,
                     # the first byte sent is replaced by /S/
-                    self.tx_ack.eq((self.timer == 0)),
+                    self.tx_ack.eq((timer == 0)),
                     timer_en.eq(1),
                     self.encoder.k[0].eq(1),
                     self.encoder.d[0].eq(K(27, 7)),
@@ -122,7 +122,7 @@ class TransmitPath(Module):
         )
         fsm.act("DATA",
             If(self.tx_stb,
-                self.tx_ack.eq((self.timer == 0)),
+                self.tx_ack.eq((timer == 0)),
                 timer_en.eq(1),
                 self.encoder.d[0].eq(self.tx_data)
             ).Else(
@@ -163,7 +163,7 @@ class ReceivePath(Module):
         self.submodules.decoder = code_8b10b.Decoder(lsb_first=lsb_first)
 
         # SGMII Speed Adaptation
-        self.timer = Signal(max=1000)
+        timer = Signal(max=1000)
         self.sgmii_speed = Signal(2)
         self.sample_en = Signal()
 
@@ -189,21 +189,21 @@ class ReceivePath(Module):
         # Timer for SGMII data rates
         timer_en = Signal()
         self.sync += [
-            If(~timer_en | (self.timer == 0),
+            If(~timer_en | (timer == 0),
                 If(self.sgmii_speed == 0b00,
-                    self.timer.eq(99)
+                    timer.eq(99)
                 ).Elif(self.sgmii_speed == 0b01,
-                    self.timer.eq(9)
+                    timer.eq(9)
                 ).Elif(self.sgmii_speed == 0b10,
-                    self.timer.eq(0)
+                    timer.eq(0)
                 )
             ).Elif(timer_en,
-                self.timer.eq(self.timer - 1)
+                timer.eq(timer - 1)
             )
         ]
 
         # Speed adaptation
-        self.comb += self.sample_en.eq(self.rx_en & (self.timer == 0))
+        self.comb += self.sample_en.eq(self.rx_en & (timer == 0))
 
         # PCS receive state diagram, Figure 36-7a/b
         fsm = FSM()
@@ -290,7 +290,7 @@ class PCS(Module):
         self.restart = Signal()
 
         # SGMII Speed Adaptation
-        self.is_sgmii = Signal()
+        is_sgmii = Signal()
         self.link_partner_adv_ability = Signal(16)
 
         # # #
@@ -333,8 +333,8 @@ class PCS(Module):
 
         autoneg_ack = Signal()
         self.comb += self.tx.config_reg.eq(
-            (self.is_sgmii) |       # SGMII-specific
-            (~self.is_sgmii << 5) | # Full-duplex
+            (is_sgmii) |       # SGMII-specific
+            (~is_sgmii << 5) | # Full-duplex
             (autoneg_ack << 14)     # ACK
         )
 
@@ -432,10 +432,10 @@ class PCS(Module):
         ]
 
         # Speed detection via SGMII
-        sgmii_speed = Mux(self.is_sgmii,
+        sgmii_speed = Mux(is_sgmii,
             self.link_partner_adv_ability[10:12], 0b10)
         self.comb += [
-            self.is_sgmii.eq(self.link_partner_adv_ability[0]),
+            is_sgmii.eq(self.link_partner_adv_ability[0]),
             self.tx.sgmii_speed.eq(sgmii_speed),
             self.rx.sgmii_speed.eq(sgmii_speed)
         ]
