@@ -399,15 +399,13 @@ class PCS(Module):
             If(self.rx.seen_config_reg,
                 prev_config_reg.eq(self.rx.config_reg),
                 If((c_counter == 1) &
-                    ((prev_config_reg&0x3fff) == (self.rx.config_reg&0x3fff)),
-                    # Ability match
-                    rx_config_reg_abi.i.eq(1),
-                    preack_config_reg.eq(prev_config_reg),
-                    # Acknowledgement/Consistency match
-                    If((prev_config_reg[14] & self.rx.config_reg[14]) &
-                        ((preack_config_reg&0x3fff) == (self.rx.config_reg&0x3fff)),
-                        rx_config_reg_ack.i.eq(1)
-                    )
+                    ((prev_config_reg&0xbfff) == (self.rx.config_reg&0xbfff)),
+                        # Ability match
+                        rx_config_reg_abi.i.eq(1),
+                        # Acknowledgement/Consistency match
+                        If(self.rx.config_reg[14] & self.rx.config_reg[14],
+                            rx_config_reg_ack.i.eq(1),
+                        ),
                 ),
                 # Record advertised ability of link partner
                 self.link_partner_adv_ability.eq(self.rx.config_reg)
@@ -421,7 +419,7 @@ class PCS(Module):
         self.specials += MultiReg(sgmii_speed, sgmii_speed_tx)
         self.comb += [
             is_sgmii.i.eq(self.link_partner_adv_ability[0]),
-            link_down.i.eq((self.link_partner_adv_ability | 1) == 1),
+            link_down.i.eq(~self.link_partner_adv_ability[15]),
             self.tx.sgmii_speed.eq(sgmii_speed_tx),
             self.rx.sgmii_speed.eq(sgmii_speed)
         ]
