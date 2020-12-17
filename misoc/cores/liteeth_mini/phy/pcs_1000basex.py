@@ -3,7 +3,7 @@ from math import ceil
 from migen import *
 from migen.genlib.fsm import *
 from migen.genlib.misc import WaitTimer
-from migen.genlib.cdc import PulseSynchronizer, MultiReg
+from migen.genlib.cdc import PulseSynchronizer
 
 from misoc.interconnect import stream
 from misoc.cores import code_8b10b
@@ -277,6 +277,8 @@ class PCS(Module):
         self.link_up = Signal()
         self.restart = Signal()
 
+        # SGMII Speed Adaptation
+        is_sgmii = Signal()
         self.link_partner_adv_ability = Signal(16)
 
         # # #
@@ -318,13 +320,11 @@ class PCS(Module):
         ]
 
         autoneg_ack = Signal()
-        is_sgmii = PulseSynchronizer("eth_rx", "eth_tx")
-        link_down = PulseSynchronizer("eth_rx", "eth_tx")
         self.comb += self.tx.config_reg.eq(
-            (is_sgmii.o) |                # SGMII-specific
-            (~is_sgmii.o << 5) |          # Full-duplex
+            (is_sgmii) |                # SGMII-specific
+            (~is_sgmii << 5) |          # Full-duplex
             (autoneg_ack << 14) |       # ACK
-            (is_sgmii.o & self.link_up)   # SGMII link-up
+            (is_sgmii & self.link_up)   # SGMII link-up
         )
 
         rx_config_reg_abi = PulseSynchronizer("eth_rx", "eth_tx")
@@ -377,49 +377,56 @@ class PCS(Module):
         # LINK_OK
         fsm.act("RUNNING",
             self.link_up.eq(1),
-            If((checker_tick & ~checker_ok) | link_down.o,
+            If((checker_tick & ~checker_ok) | rx_config_reg_abi.o,
                 self.restart.eq(1),
                 NextState("AUTONEG_WAIT_ABI")
             )
         )
 
-        c_counter = Signal(max=5)
+        c_counter = Signal(max=8)
+        c_mask = Signal(16)
         prev_config_reg = Signal(16)
-        preack_config_reg = Signal(16)
+        self.comb += c_mask.eq(Cat(C(1, 13), rx_config_reg_abi.i, C(1)))
         self.sync.eth_rx += [
             # Restart consistency counter
-            If(self.rx.seen_config_reg,
-                c_counter.eq(4)
+            # (Note: self.rx.seen_config_reg is asserted at the same time as rx_config_reg[15:8] has been latched)
+            If(self.rx.seen_config_reg &
+                (((prev_config_reg&c_mask) != (self.rx.config_reg&c_mask)) |
+                (self.rx.config_reg == 0)), 
+                    c_counter.eq(4),
+                    rx_config_reg_abi.i.eq(0),
+                    rx_config_reg_ack.i.eq(0),
             ).Elif(c_counter != 0,
                 c_counter.eq(c_counter - 1)
             ),
+            If(c_counter == 0,
+                rx_config_reg_abi.i.eq(0),
+                rx_config_reg_ack.i.eq(0),
+            ),
 
-            rx_config_reg_abi.i.eq(0),
-            rx_config_reg_ack.i.eq(0),
             If(self.rx.seen_config_reg,
+                # Record every config_reg's value
                 prev_config_reg.eq(self.rx.config_reg),
-                If((c_counter == 1) &
-                    ((prev_config_reg&0xbfff) == (self.rx.config_reg&0xbfff)),
-                        # Ability match
-                        rx_config_reg_abi.i.eq(1),
-                        # Acknowledgement/Consistency match
-                        If(self.rx.config_reg[14] & self.rx.config_reg[14],
-                            rx_config_reg_ack.i.eq(1),
-                        ),
+                # Ability match (1st, 2nd and 3rd config_reg match)
+                If(c_counter == 5,
+                    rx_config_reg_abi.i.eq(1),
+                    # Record advertised ability of link partner
+                    self.link_partner_adv_ability.eq(self.rx.config_reg)
                 ),
-                # Record advertised ability of link partner
-                self.link_partner_adv_ability.eq(self.rx.config_reg)
-            )
+                # Acknowledgement/Consistency match (4th, 5th and 6th config_reg match)
+                If((c_counter == 2) &
+                    (self.rx.config_reg[14] == 1) &
+                    ((self.link_partner_adv_ability&0xbfff) == (self.rx.config_reg&0xbfff)),
+                        rx_config_reg_ack.i.eq(1)
+                )
+            ),
         ]
 
         # Speed detection via SGMII
-        sgmii_speed = Mux(self.link_partner_adv_ability[0],
+        sgmii_speed = Mux(is_sgmii,
             self.link_partner_adv_ability[10:12], 0b10)
-        sgmii_speed_tx = Signal(2)
-        self.specials += MultiReg(sgmii_speed, sgmii_speed_tx)
         self.comb += [
-            is_sgmii.i.eq(self.link_partner_adv_ability[0]),
-            link_down.i.eq(~self.link_partner_adv_ability[15]),
-            self.tx.sgmii_speed.eq(sgmii_speed_tx),
+            is_sgmii.eq(self.link_partner_adv_ability[0]),
+            self.tx.sgmii_speed.eq(sgmii_speed),
             self.rx.sgmii_speed.eq(sgmii_speed)
         ]
