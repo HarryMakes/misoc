@@ -3,7 +3,7 @@ from math import ceil
 from migen import *
 from migen.genlib.fsm import *
 from migen.genlib.misc import WaitTimer
-from migen.genlib.cdc import PulseSynchronizer
+from migen.genlib.cdc import PulseSynchronizer, MultiReg
 
 from misoc.interconnect import stream
 from misoc.cores import code_8b10b
@@ -277,8 +277,6 @@ class PCS(Module):
         self.link_up = Signal()
         self.restart = Signal()
 
-        # SGMII Speed Adaptation
-        is_sgmii = Signal()
         self.link_partner_adv_ability = Signal(16)
 
         # # #
@@ -320,11 +318,13 @@ class PCS(Module):
         ]
 
         autoneg_ack = Signal()
+        is_sgmii = PulseSynchronizer("eth_rx", "eth_tx")
+        link_down = PulseSynchronizer("eth_rx", "eth_tx")
         self.comb += self.tx.config_reg.eq(
-            (is_sgmii) |                # SGMII-specific
-            (~is_sgmii << 5) |          # Full-duplex
+            (is_sgmii.o) |                # SGMII-specific
+            (~is_sgmii.o << 5) |          # Full-duplex
             (autoneg_ack << 14) |       # ACK
-            (is_sgmii & self.link_up)   # SGMII link-up
+            (is_sgmii.o & self.link_up)   # SGMII link-up
         )
 
         rx_config_reg_abi = PulseSynchronizer("eth_rx", "eth_tx")
@@ -336,8 +336,6 @@ class PCS(Module):
         more_ack_timer = ClockDomainsRenamer("eth_tx")(
             WaitTimer(ceil(more_ack_time*125e6)))
         self.submodules += more_ack_timer
-
-        config_empty = Signal()
 
         fsm = ClockDomainsRenamer("eth_tx")(FSM())
         self.submodules += fsm
@@ -379,14 +377,14 @@ class PCS(Module):
         # LINK_OK
         fsm.act("RUNNING",
             self.link_up.eq(1),
-            If((checker_tick & ~checker_ok) | config_empty,
+            If((checker_tick & ~checker_ok) | link_down.o,
                 self.restart.eq(1),
                 NextState("AUTONEG_WAIT_ABI")
             )
         )
 
         c_counter = Signal(max=5)
-        previous_config_reg = Signal(16)
+        prev_config_reg = Signal(16)
         preack_config_reg = Signal(16)
         self.sync.eth_rx += [
             # Restart consistency counter
@@ -399,14 +397,14 @@ class PCS(Module):
             rx_config_reg_abi.i.eq(0),
             rx_config_reg_ack.i.eq(0),
             If(self.rx.seen_config_reg,
-                previous_config_reg.eq(self.rx.config_reg),
+                prev_config_reg.eq(self.rx.config_reg),
                 If((c_counter == 1) &
-                    ((previous_config_reg&0x3fff) == (self.rx.config_reg&0x3fff)),
+                    ((prev_config_reg&0x3fff) == (self.rx.config_reg&0x3fff)),
                     # Ability match
                     rx_config_reg_abi.i.eq(1),
-                    preack_config_reg.eq(previous_config_reg),
+                    preack_config_reg.eq(prev_config_reg),
                     # Acknowledgement/Consistency match
-                    If((previous_config_reg[14] & self.rx.config_reg[14]) &
+                    If((prev_config_reg[14] & self.rx.config_reg[14]) &
                         ((preack_config_reg&0x3fff) == (self.rx.config_reg&0x3fff)),
                         rx_config_reg_ack.i.eq(1)
                     )
@@ -417,15 +415,13 @@ class PCS(Module):
         ]
 
         # Speed detection via SGMII
-        sgmii_speed = Mux(is_sgmii,
+        sgmii_speed = Mux(self.link_partner_adv_ability[0],
             self.link_partner_adv_ability[10:12], 0b10)
+        sgmii_speed_tx = Signal(2)
+        self.specials += MultiReg(sgmii_speed, sgmii_speed_tx)
         self.comb += [
-            is_sgmii.eq(self.link_partner_adv_ability[0]),
-            self.tx.sgmii_speed.eq(sgmii_speed),
+            is_sgmii.i.eq(self.link_partner_adv_ability[0]),
+            link_down.i.eq((self.link_partner_adv_ability | 1) == 1),
+            self.tx.sgmii_speed.eq(sgmii_speed_tx),
             self.rx.sgmii_speed.eq(sgmii_speed)
-        ]
-
-        # Detect that config becomes empty
-        self.comb += [
-            config_empty.eq((self.link_partner_adv_ability | 1) == 1)
         ]
