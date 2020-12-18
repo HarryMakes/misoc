@@ -395,26 +395,21 @@ class PCS(Module):
         # LINK_OK
         fsm.act("RUNNING",
             self.link_up.eq(1),
-            If(checker_tick & ~checker_ok,
+            If((checker_tick & ~checker_ok) | sgmii_empty,
                 self.restart.eq(1),
                 NextState("AUTONEG_WAIT_ABI")
             )
         )
 
         c_counter = Signal(max=5)
-        c_counter_wait = Signal()
         prev_config_reg = Signal(16)
         abi_config_reg = Signal(16)
         abi_match = Signal()
-        self.comb += [
-            # Pause c_counter if TX is switching between SGMII and 1000BASE-X
-            c_counter_wait.eq(prev_config_reg[0] == self.rx.config_reg[0])
-        ]
         self.sync.eth_rx += [
             # Restart consistency counter
-            If(self.rx.seen_config_reg | ~c_counter_wait,
+            If(self.rx.seen_config_reg,
                 c_counter.eq(4)
-            ).Elif((c_counter != 0) & c_counter_wait,
+            ).Elif(c_counter != 0,
                 c_counter.eq(c_counter - 1)
             ),
 
@@ -424,7 +419,7 @@ class PCS(Module):
                 # Record current config_reg for comparison in the next clock cycle
                 prev_config_reg.eq(self.rx.config_reg),
                 # Compare consecutive values of config_reg
-                If(c_counter_wait & (c_counter == 1),
+                If(c_counter == 1,
                     # Ability match
                     If(~abi_match &
                         (prev_config_reg&0xbfff == self.rx.config_reg&0xbfff),
@@ -445,6 +440,3 @@ class PCS(Module):
                 self.lp_abi.i.eq(self.rx.config_reg)
             )
         ]
-
-        self.c_counter_wait_n = Signal()
-        self.comb += self.c_counter_wait_n.eq(~c_counter_wait)

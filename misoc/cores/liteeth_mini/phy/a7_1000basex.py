@@ -821,4 +821,3 @@ class A7_1000BASEX(Module):
         self.tbi_tx = pcs.tbi_tx
         self.tbi_rx = pcs.tbi_rx
         self.lp_abi = pcs.lp_abi.o
-        self.c_counter_wait_n = pcs.c_counter_wait_n
