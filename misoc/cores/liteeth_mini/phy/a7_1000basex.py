@@ -820,5 +820,5 @@ class A7_1000BASEX(Module):
         self.rxdata = rx_data
         self.tbi_tx = pcs.tbi_tx
         self.tbi_rx = pcs.tbi_rx
-        self.link_partner_adv_ability = pcs.link_partner_adv_ability
+        self.lp_abi = pcs.lp_abi.o
         self.c_counter_wait_n = pcs.c_counter_wait_n
