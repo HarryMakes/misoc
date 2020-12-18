@@ -403,8 +403,6 @@ class PCS(Module):
 
         c_counter = Signal(max=5)
         prev_config_reg = Signal(16)
-        abi_config_reg = Signal(16)
-        abi_match = Signal()
         self.sync.eth_rx += [
             # Restart consistency counter
             If(self.rx.seen_config_reg,
@@ -420,21 +418,16 @@ class PCS(Module):
                 prev_config_reg.eq(self.rx.config_reg),
                 # Compare consecutive values of config_reg
                 If(c_counter == 1,
-                    # Ability match
-                    If(~abi_match &
-                        (prev_config_reg&0xbfff == self.rx.config_reg&0xbfff),
-                            rx_config_reg_abi.i.eq(1),
-                            abi_match.eq(1),
-                            abi_config_reg.eq(self.rx.config_reg)
-                    ),
-                    # Acknowledgement/Consistency match
-                    If(abi_match &
-                        (prev_config_reg[14] & self.rx.config_reg[14]) &
-                        (prev_config_reg == self.rx.config_reg) &
-                        (abi_config_reg&0xbfff == self.rx.config_reg&0xbfff),
+                    If(prev_config_reg&0xbfff == self.rx.config_reg&0xbfff,
+                        # Acknowledgement/Consistency match
+                        If(prev_config_reg[14] & self.rx.config_reg[14],
                             rx_config_reg_ack.i.eq(1),
-                            abi_match.eq(0)
-                    )
+                        )
+                        # Ability match
+                        .Else(
+                            rx_config_reg_abi.i.eq(1),
+                        )
+                    ),
                 ),
                 # Record advertised ability of link partner
                 self.lp_abi.i.eq(self.rx.config_reg)
