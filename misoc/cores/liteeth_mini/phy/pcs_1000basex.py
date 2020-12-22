@@ -322,11 +322,13 @@ class PCS(Module):
         tx_config_empty = Signal()
         # Detections in SGMII mode
         is_sgmii = Signal()
-        sgmii_linkdown = Signal()
+        linkdown = Signal()
         self.comb += [
             is_sgmii.eq(self.lp_abi.o[0]),
-            # Detect that, in SGMII mode, whether or not link is down
-            sgmii_linkdown.eq(self.lp_abi.o[0] & ~self.lp_abi.o[15]),
+            # Detect that link is down:
+            # - 1000BASE-X: linkup can be inferred by non-empty reg
+            # - SGMII: linkup is indicated with bit 15
+            linkdown.eq((self.lp_abi.o[0] & ~self.lp_abi.o[15]) | (self.lp_abi.o == 0)),
             self.tx.sgmii_speed.eq(Mux(self.lp_abi.o[0],
                 self.lp_abi.o[10:12], 0b10)),
             self.rx.sgmii_speed.eq(Mux(self.lp_abi.i[0],
@@ -341,7 +343,7 @@ class PCS(Module):
                     self.lp_abi.o[10:12], 0) << 10) |
                 (is_sgmii << 12) |                      # SGMII: Full-duplex
                 (autoneg_ack << 14) |                   # SGMII/1000BASE-X: Acknowledge Bit
-                (is_sgmii & self.link_up)              # SGMII: Link-up
+                (is_sgmii & self.link_up)               # SGMII: Link-up
             ))
         ]
 
@@ -411,7 +413,7 @@ class PCS(Module):
         # LINK_OK
         fsm.act("RUNNING",
             self.link_up.eq(1),
-            If((checker_tick & ~checker_ok) | sgmii_linkdown,
+            If((checker_tick & ~checker_ok) | linkdown,
                 self.restart.eq(1),
                 NextState("AUTONEG_BREAKLINK")
             )
@@ -433,17 +435,15 @@ class PCS(Module):
                 # Record current config_reg for comparison in the next clock cycle
                 prev_config_reg.eq(self.rx.config_reg),
                 # Compare consecutive values of config_reg
-                If(c_counter == 1,
-                    If(prev_config_reg&0xbfff == self.rx.config_reg&0xbfff,
-                        # Acknowledgement/Consistency match
-                        If(prev_config_reg[14] & self.rx.config_reg[14],
-                            rx_config_reg_ack.i.eq(1),
-                        )
-                        # Ability match
-                        .Else(
-                            rx_config_reg_abi.i.eq(1),
-                        )
-                    ),
+                If((c_counter == 1) & (prev_config_reg&0xbfff == self.rx.config_reg&0xbfff),
+                    # Acknowledgement/Consistency match
+                    If(prev_config_reg[14] & self.rx.config_reg[14],
+                        rx_config_reg_ack.i.eq(1),
+                    )
+                    # Ability match
+                    .Else(
+                        rx_config_reg_abi.i.eq(1),
+                    )
                 ),
                 # Record advertised ability of link partner
                 self.lp_abi.i.eq(self.rx.config_reg)
