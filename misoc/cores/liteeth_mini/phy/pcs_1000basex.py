@@ -318,6 +318,8 @@ class PCS(Module):
             If(checker_tick, checker_ok.eq(0))
         ]
 
+        # Control if tx_config_reg should be empty
+        tx_config_empty = Signal()
         # Detections in SGMII mode
         is_sgmii = Signal()
         sgmii_empty = Signal()
@@ -330,15 +332,17 @@ class PCS(Module):
                 self.lp_abi.i[10:12], 0b10))
         ]
         autoneg_ack = Signal()
-        self.comb += self.tx.config_reg.eq(
-            (is_sgmii) |                            # SGMII: SGMII in-use
-            (~is_sgmii << 5) |                      # 1000BASE-X: Full-duplex
-            (Mux(self.lp_abi.o[0],                  # SGMII: Speed
-                self.lp_abi.o[10:12], 0) << 10) |
-            (is_sgmii << 12) |                      # SGMII: Full-duplex
-            (autoneg_ack << 14) |                   # SGMII/1000BASE-X: Acknowledge Bit
-            (is_sgmii & self.link_up)               # SGMII: Link-up
-        )
+        self.comb += [
+            self.tx.config_reg.eq(Mux(tx_config_empty, 0,
+                (is_sgmii) |                            # SGMII: SGMII in-use
+                (~is_sgmii << 5) |                      # 1000BASE-X: Full-duplex
+                (Mux(self.lp_abi.o[0],                  # SGMII: Speed
+                    self.lp_abi.o[10:12], 0) << 10) |
+                (is_sgmii << 12) |                      # SGMII: Full-duplex
+                (autoneg_ack << 14) |                   # SGMII/1000BASE-X: Acknowledge Bit
+                (is_sgmii & self.link_up)              # SGMII: Link-up
+            ))
+        ]
 
         rx_config_reg_abi = PulseSynchronizer("eth_rx", "eth_tx")
         rx_config_reg_ack = PulseSynchronizer("eth_rx", "eth_tx")
@@ -356,6 +360,16 @@ class PCS(Module):
         fsm = ClockDomainsRenamer("eth_tx")(FSM())
         self.submodules += fsm
 
+        # AN_ENABLE
+        fsm.act("AUTONEG_BREAKLINK",
+            self.tx.config_stb.eq(1),
+            tx_config_empty.eq(1),
+            more_ack_timer.wait.eq(1),
+            If(more_ack_timer.done,
+                NextState("AUTONEG_WAIT_ABI")
+            )
+        )
+        # ABILITY_DETECT
         fsm.act("AUTONEG_WAIT_ABI",
             self.tx.config_stb.eq(1),
             If(rx_config_reg_abi.o,
@@ -363,9 +377,10 @@ class PCS(Module):
             ),
             If(checker_tick & ~checker_ok,
                 self.restart.eq(1),
-                NextState("AUTONEG_WAIT_ABI")
+                NextState("AUTONEG_BREAKLINK")
             )
         )
+        # ACKNOWLEDGE_DETECT
         fsm.act("AUTONEG_WAIT_ACK",
             self.tx.config_stb.eq(1),
             autoneg_ack.eq(1),
@@ -374,7 +389,7 @@ class PCS(Module):
             ),
             If(checker_tick & ~checker_ok,
                 self.restart.eq(1),
-                NextState("AUTONEG_WAIT_ABI")
+                NextState("AUTONEG_BREAKLINK")
             )
         )
         # COMPLETE_ACKNOWLEDGE
@@ -389,7 +404,7 @@ class PCS(Module):
             ),
             If(checker_tick & ~checker_ok,
                 self.restart.eq(1),
-                NextState("AUTONEG_WAIT_ABI")
+                NextState("AUTONEG_BREAKLINK")
             )
         )
         # LINK_OK
@@ -397,7 +412,7 @@ class PCS(Module):
             self.link_up.eq(1),
             If((checker_tick & ~checker_ok) | sgmii_empty,
                 self.restart.eq(1),
-                NextState("AUTONEG_WAIT_ABI")
+                NextState("AUTONEG_BREAKLINK")
             )
         )
 
