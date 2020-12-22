@@ -322,10 +322,11 @@ class PCS(Module):
         tx_config_empty = Signal()
         # Detections in SGMII mode
         is_sgmii = Signal()
-        sgmii_empty = Signal()
+        sgmii_linkdown = Signal()
         self.comb += [
             is_sgmii.eq(self.lp_abi.o[0]),
-            sgmii_empty.eq(self.rx.config_reg[1:] == 0),
+            # Detect that, in SGMII mode, whether or not link is down
+            sgmii_linkdown.eq(self.lp_abi.o[0] & ~self.lp_abi.o[15]),
             self.tx.sgmii_speed.eq(Mux(self.lp_abi.o[0],
                 self.lp_abi.o[10:12], 0b10)),
             self.rx.sgmii_speed.eq(Mux(self.lp_abi.i[0],
@@ -410,7 +411,7 @@ class PCS(Module):
         # LINK_OK
         fsm.act("RUNNING",
             self.link_up.eq(1),
-            If((checker_tick & ~checker_ok) | sgmii_empty,
+            If((checker_tick & ~checker_ok) | sgmii_linkdown,
                 self.restart.eq(1),
                 NextState("AUTONEG_BREAKLINK")
             )
